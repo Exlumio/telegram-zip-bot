@@ -83,3 +83,16 @@ def run_webserver():
     loop.run_forever()
 
 run_webserver()
+
+if __name__ == "__main__":
+    # Запускаем телеграм-бота
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+
+    # Запускаем веб-сервер-заглушку параллельно с ботом
+    import threading
+    threading.Thread(target=run_webserver).start()
+
+    # Запускаем Telegram polling
+    app.run_polling()
