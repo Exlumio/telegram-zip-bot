@@ -1,10 +1,8 @@
-import asyncio
-import logging
 import os
-import random
-import string
 import subprocess
-
+import tempfile
+import logging
+import secrets
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,66 +12,63 @@ from telegram.ext import (
     filters,
 )
 
-import nest_asyncio
-nest_asyncio.apply()
-
-# Логгинг
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получи токен из переменной окружения (рекомендуется для Render)
-TOKEN = os.environ.get("BOT_TOKEN")  # Установи в Render > Environment > BOT_TOKEN
 
-# Генерация пароля
-def generate_password(length=8):
-    chars = string.ascii_letters + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Привет! Отправь мне файл, и я пришлю его в zip-архиве с паролем.")
 
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Пришли мне файл, и я заархивирую его с паролем.")
 
-# Обработка файла
-async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document or update.message.video or update.message.audio
-    if not file:
-        await update.message.reply_text("Пожалуйста, пришли файл.")
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    document = update.message.document or update.message.video or update.message.audio
+    if not document:
+        await update.message.reply_text("Пожалуйста, отправь файл.")
         return
 
-    file_id = file.file_id
-    file_name = file.file_name
-    password = generate_password()
+    file = await context.bot.get_file(document.file_id)
 
-    new_name = f"{file_id}_{file_name}"
-    zip_name = f"{file_id}.zip"
+    # Сохраняем оригинальный файл во временную папку
+    with tempfile.TemporaryDirectory() as tmpdir:
+        original_path = os.path.join(tmpdir, document.file_name)
+        zip_path = os.path.join(tmpdir, f"{document.file_name}.zip")
+        password = secrets.token_hex(4)
 
-    file_obj = await context.bot.get_file(file_id)
-    await file_obj.download_to_drive(new_name)
+        await file.download_to_drive(original_path)
 
-    # Используем встроенный zip для создания архива с паролем (не AES)
-    subprocess.run(["zip", "-P", password, zip_name, new_name], check=True)
+        # Создание zip-архива с паролем через встроенную утилиту zip
+        result = subprocess.run(
+            ["zip", "-j", "-P", password, zip_path, original_path],
+            capture_output=True,
+        )
 
-    with open(zip_name, "rb") as f:
-        await update.message.reply_document(f, filename=zip_name)
+        if result.returncode != 0:
+            logger.error(f"Ошибка при создании архива: {result.stderr.decode()}")
+            await update.message.reply_text("Произошла ошибка при создании архива.")
+            return
 
-    await update.message.reply_text(f"🔐 Пароль: `{password}`", parse_mode="Markdown")
+        # Отправляем zip-файл обратно пользователю
+        with open(zip_path, "rb") as f:
+            await update.message.reply_document(f, filename=f"{document.file_name}.zip")
 
-    # Удаляем временные файлы
-    os.remove(new_name)
-    os.remove(zip_name)
+        await update.message.reply_text(f"Пароль для архива: `{password}`", parse_mode="Markdown")
 
-# Основной запуск
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+
+async def main() -> None:
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        raise ValueError("Переменная окружения BOT_TOKEN не установлена")
+
+    app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL | filters.Audio.ALL, handle_file))
+    app.add_handler(MessageHandler(
+        filters.Document.ALL | filters.Video | filters.Audio.ALL, handle_file))
 
-    logger.info("Бот запущен...")
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    logging.info("Bot started.")
+    await app.run_polling()
 
-# Запускаем с учётом nest_asyncio
-asyncio.get_event_loop().create_task(main())
-asyncio.get_event_loop().run_forever()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
