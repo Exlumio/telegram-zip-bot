@@ -1,76 +1,66 @@
 import os
-import asyncio
 import logging
 import nest_asyncio
-import subprocess
-from uuid import uuid4
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
+from aiohttp import web
+import zipfile
+from datetime import datetime
 
-# Настройка логов
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Получение токена и адреса вебхука из переменных окружения
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Пример: https://your-bot-name.onrender.com
+BASE_DIR = "downloads"
+nest_asyncio.apply()
 
-# Папка для сохранения временных файлов
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+logging.basicConfig(level=logging.INFO)
 
-# Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Пришли мне файл, и я зашифрую его в zip с паролем.")
+    await update.message.reply_text("Привет! Пришли мне файл, и я заархивирую его с паролем 🔐")
 
-# Обработка документов и медиафайлов
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    file = message.document or message.audio or message.video or message.voice or message.photo[-1]
+    file = update.message.document or update.message.audio
+    if not file:
+        await update.message.reply_text("Пожалуйста, пришли документ или аудиофайл.")
+        return
 
-    tg_file = await file.get_file()
-    file_id = str(uuid4())
-    file_path = os.path.join(DOWNLOAD_DIR, file_id + "_input")
-    output_path = os.path.join(DOWNLOAD_DIR, file_id + ".zip")
+    user_id = str(update.message.from_user.id)
+    user_dir = os.path.join(BASE_DIR, user_id)
+    os.makedirs(user_dir, exist_ok=True)
 
-    # Скачиваем файл
-    await tg_file.download_to_drive(file_path)
+    file_path = os.path.join(user_dir, file.file_name)
+    file_obj = await context.bot.get_file(file.file_id)
+    await file_obj.download_to_drive(file_path)
 
-    # Генерируем пароль и шифруем
-    password = uuid4().hex[:10]
-    subprocess.run(["zip", "-j", "-P", password, output_path, file_path], check=True)
+    zip_path = os.path.join(user_dir, f"{file.file_name}.zip")
+    password = datetime.now().strftime("%Y%m%d")
 
-    # Отправка архива
-    await message.reply_document(open(output_path, "rb"), caption=f"Пароль: `{password}`", parse_mode="Markdown")
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zipf.setpassword(password.encode())
+        zipf.write(file_path, arcname=file.file_name)
 
-    # Очистка
+    with open(zip_path, "rb") as zf:
+        await update.message.reply_document(zf, filename=os.path.basename(zip_path), caption=f"Пароль: `{password}`", parse_mode="Markdown")
+
     os.remove(file_path)
-    os.remove(output_path)
+    os.remove(zip_path)
 
-# Основная функция запуска бота
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(
-        filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.VOICE,
-        handle_file
-    ))
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.Audio.ALL, handle_file))
 
-    # Установка webhook
-    await app.bot.delete_webhook()
-    await app.bot.set_webhook(url=WEBHOOK_URL)
-
-    # Запуск webhook-сервера
+    # Устанавливаем Webhook
     await app.run_webhook(
         listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000)),
-        webhook_url=WEBHOOK_URL
+        port=10000,
+        webhook_url="https://telegram-zip-bot.onrender.com",  # <== исправлено
     )
 
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
+    import asyncio
+    asyncio.run(main())
