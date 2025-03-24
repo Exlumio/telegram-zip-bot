@@ -62,7 +62,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(
-        filters.Document.ALL | filters.Audio.ALL | filters.Video.ALL,
+        filters.ATTACHMENT,
         handle_file
     ))
 
