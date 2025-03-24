@@ -1,84 +1,76 @@
-import logging
 import os
-import random
-import string
+import asyncio
+import logging
+import nest_asyncio
 import subprocess
-
+from uuid import uuid4
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = "https://telegram-zip-bot.onrender.com"
-PORT = int(os.environ.get("PORT", 10000))
-
+# Настройка логов
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Генерация случайного пароля
-def generate_password(length=8):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+# Получение токена и адреса вебхука из переменных окружения
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Пример: https://your-bot-name.onrender.com
 
-# Обработка команды /start
+# Папка для сохранения временных файлов
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь мне файл, и я пришлю его в zip-архиве с паролем.")
+    await update.message.reply_text("Привет! Пришли мне файл, и я зашифрую его в zip с паролем.")
 
-# Обработка файлов
-def zip_file_with_password(input_path, output_path, password):
-    result = subprocess.run([
-        'zip', '-j', '--password', password, output_path, input_path
-    ], capture_output=True, text=True)
-    if result.returncode != 0:
-        logging.error(f"ZIP error: {result.stderr}")
-    return result.returncode == 0
-
+# Обработка документов и медиафайлов
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document
-    if not file:
-        await update.message.reply_text("Отправь, пожалуйста, файл.")
-        return
+    message = update.message
+    file = message.document or message.audio or message.video or message.voice or message.photo[-1]
 
-    file_path = f"downloads/{file.file_unique_id}_{file.file_name}"
-    zip_path = file_path + ".zip"
+    tg_file = await file.get_file()
+    file_id = str(uuid4())
+    file_path = os.path.join(DOWNLOAD_DIR, file_id + "_input")
+    output_path = os.path.join(DOWNLOAD_DIR, file_id + ".zip")
 
-    os.makedirs("downloads", exist_ok=True)
+    # Скачиваем файл
+    await tg_file.download_to_drive(file_path)
 
-    telegram_file = await context.bot.get_file(file.file_id)
-    await telegram_file.download_to_drive(file_path)
+    # Генерируем пароль и шифруем
+    password = uuid4().hex[:10]
+    subprocess.run(["zip", "-j", "-P", password, output_path, file_path], check=True)
 
-    password = generate_password()
-    success = zip_file_with_password(file_path, zip_path, password)
+    # Отправка архива
+    await message.reply_document(open(output_path, "rb"), caption=f"Пароль: `{password}`", parse_mode="Markdown")
 
-    if success:
-        await update.message.reply_document(
-            document=open(zip_path, "rb"),
-            filename=os.path.basename(zip_path),
-            caption=f"Пароль для архива: {password}"
-        )
-    else:
-        await update.message.reply_text("Не удалось создать архив.")
-
+    # Очистка
     os.remove(file_path)
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
+    os.remove(output_path)
 
+# Основная функция запуска бота
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app.add_handler(MessageHandler(
+        filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.VOICE,
+        handle_file
+    ))
 
+    # Установка webhook
+    await app.bot.delete_webhook()
     await app.bot.set_webhook(url=WEBHOOK_URL)
+
+    # Запуск webhook-сервера
     await app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
+        port=int(os.environ.get("PORT", 10000)),
         webhook_url=WEBHOOK_URL
     )
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+if __name__ == "__main__":
+    nest_asyncio.apply()
+    asyncio.get_event_loop().run_until_complete(main())
