@@ -63,6 +63,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.run_polling()
+
 from aiohttp import web
 import asyncio
 
@@ -77,5 +78,8 @@ def run_webserver():
     loop = asyncio.get_event_loop()
     runner = web.AppRunner(app)
     loop.run_until_complete(runner.setup())
-    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
+    loop.run_until_complete(site.start())
+    loop.run_forever()
 
+run_webserver()
