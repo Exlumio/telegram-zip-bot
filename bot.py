@@ -3,6 +3,8 @@ import logging
 import asyncio
 import aiohttp
 import pyzipper
+import secrets
+import string
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -19,6 +21,11 @@ logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # например: https://your-bot-name.onrender.com
 
+# Генератор случайного пароля
+def generate_password(length=10):
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
 # Обработка команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Пришли мне файл, и я упакую его в zip с паролем!")
@@ -32,7 +39,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("Файл не поддерживается.")
         return
 
-    password = "secret123"
+    password = generate_password()
     file_name = file.file_name or "file"
     zip_name = file_name + ".zip"
 
@@ -53,7 +60,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         zf.write(file_name, arcname=file_name)
 
     with open(zip_name, "rb") as f:
-        await message.reply_document(f, filename=zip_name, caption=f"Архив защищён паролем: `{password}`", parse_mode="Markdown")
+        await message.reply_document(
+            f,
+            filename=zip_name,
+            caption=f"✅ Архив создан.\n🔐 Пароль: `{password}`",
+            parse_mode="Markdown"
+        )
 
     os.remove(file_name)
     os.remove(zip_name)
