@@ -1,3 +1,4 @@
 python-telegram-bot[webhooks]==20.3
 aiohttp
 nest_asyncio
+pyzipper==0.3.5

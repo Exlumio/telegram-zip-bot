@@ -1,8 +1,8 @@
 import os
 import logging
 import asyncio
-import zipfile
 import aiohttp
+import pyzipper
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -46,12 +46,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(file_name, "wb") as f:
         f.write(data)
 
-    with zipfile.ZipFile(zip_name, 'w') as zipf:
-        zipf.setpassword(password.encode())
-        zipf.write(file_name)
+    with pyzipper.AESZipFile(zip_name, 'w',
+                             compression=pyzipper.ZIP_DEFLATED,
+                             encryption=pyzipper.WZ_AES) as zf:
+        zf.setpassword(password.encode('utf-8'))
+        zf.write(file_name, arcname=file_name)
 
     with open(zip_name, "rb") as f:
-        await message.reply_document(f, filename=zip_name)
+        await message.reply_document(f, filename=zip_name, caption=f"Архив защищён паролем: `{password}`", parse_mode="Markdown")
 
     os.remove(file_name)
     os.remove(zip_name)
