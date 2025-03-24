@@ -63,3 +63,19 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.run_polling()
+from aiohttp import web
+import asyncio
+
+# Заглушка, чтобы Render думал, что бот слушает порт
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+app = web.Application()
+app.add_routes([web.get('/', handle)])
+
+def run_webserver():
+    loop = asyncio.get_event_loop()
+    runner = web.AppRunner(app)
+    loop.run_until_complete(runner.setup())
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000
+
