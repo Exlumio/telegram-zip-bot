@@ -2,13 +2,14 @@ import os
 import tempfile
 import string
 import secrets
-import subprocess
+import zipfile
+import asyncio
+from aiohttp import web
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
-
-# Хранилище пользователей, которые уже начали работу
 started_users = set()
 
 def generate_password(length=8):
@@ -48,51 +49,34 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await document.get_file()
         await file.download_to_drive(input_path)
 
-        # Архивируем через 7z
-        subprocess.run([
-            "7z", "a", "-p" + password, "-y", archive_path, input_path
-        ], check=True)
+        # Архивируем файл с паролем (zipfile)
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.setpassword(password.encode())
+            zipf.write(input_path, arcname=document.file_name)
 
         with open(archive_path, "rb") as f:
             await update.message.reply_document(f, filename=os.path.basename(archive_path))
 
         await update.message.reply_text(f"Файл заархивирован. Пароль: `{password}`", parse_mode="Markdown")
 
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.run_polling()
-
-from aiohttp import web
-import asyncio
-
-# Заглушка, чтобы Render думал, что бот слушает порт
+# Заглушка для Render (фейковый HTTP-сервер)
 async def handle(request):
     return web.Response(text="Bot is running!")
 
-app = web.Application()
-app.add_routes([web.get('/', handle)])
+app_web = web.Application()
+app_web.add_routes([web.get('/', handle)])
 
 def run_webserver():
     loop = asyncio.get_event_loop()
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app_web)
     loop.run_until_complete(runner.setup())
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
     loop.run_until_complete(site.start())
-    loop.run_forever()
-
-run_webserver()
 
 if __name__ == "__main__":
-    # Запускаем телеграм-бота
+    run_webserver()
+
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-
-    # Запускаем веб-сервер-заглушку параллельно с ботом
-    import threading
-    threading.Thread(target=run_webserver).start()
-
-    # Запускаем Telegram polling
     app.run_polling()
