@@ -1,82 +1,79 @@
 import os
-import zipfile
+import logging
 import asyncio
-from aiohttp import web
+import zipfile
+import aiohttp
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters
+    Application,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # например: https://telegram-zip-bot.onrender.com
+# Включаем логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 📦 Обработка команды /start
+TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # например: https://your-bot-name.onrender.com
+
+# Обработка команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Пришли мне файл, и я заархивирую его для тебя.")
+    await update.message.reply_text("Привет! Пришли мне файл, и я упакую его в zip с паролем!")
 
-# 📦 Обработка полученных файлов
+# Обработка файла
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = None
-    if update.message.document:
-        file = update.message.document
-    elif update.message.audio:
-        file = update.message.audio
-    elif update.message.video:
-        file = update.message.video
+    message = update.message
+    file = message.document or message.audio or message.video
 
     if not file:
-        await update.message.reply_text("Пришли файл — документ, аудио или видео.")
+        await message.reply_text("Файл не поддерживается.")
         return
 
-    file_id = file.file_id
-    new_file = await context.bot.get_file(file_id)
-    file_path = f"downloads/{file.file_name}"
-    zip_path = f"{file_path}.zip"
+    password = "secret123"
+    file_name = file.file_name or "file"
+    zip_name = file_name + ".zip"
 
-    os.makedirs("downloads", exist_ok=True)
-    await new_file.download_to_drive(file_path)
+    await message.reply_text("Скачиваю файл...")
 
-    with zipfile.ZipFile(zip_path, "w") as zipf:
-        zipf.write(file_path, arcname=file.file_name)
+    new_file = await file.get_file()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(new_file.file_path) as resp:
+            data = await resp.read()
 
-    await update.message.reply_document(document=open(zip_path, "rb"))
+    with open(file_name, "wb") as f:
+        f.write(data)
 
-    os.remove(file_path)
-    os.remove(zip_path)
+    with zipfile.ZipFile(zip_name, 'w') as zipf:
+        zipf.setpassword(password.encode())
+        zipf.write(file_name)
 
-# 🌐 Веб-сервер для Render
-async def handle_webhook(request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return web.Response()
+    with open(zip_name, "rb") as f:
+        await message.reply_document(f, filename=zip_name)
 
-# 🚀 Основной запуск
+    os.remove(file_name)
+    os.remove(zip_name)
+
+# Основная функция
 async def main():
-    global application
-    application = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(
-        filters.DOCUMENT.ALL | filters.AUDIO | filters.VIDEO,
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(
+        filters.Document.ALL | filters.Audio.ALL | filters.Video.ALL,
         handle_file
     ))
 
-    await application.bot.delete_webhook()
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-
-    app = web.Application()
-    app.router.add_post("/", handle_webhook)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 10000)  # Render использует порт 10000
-    await site.start()
-
-    print("🚀 Bot is running via webhook...")
-
-    while True:
-        await asyncio.sleep(3600)
+    # Запускаем webhook
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", "10000")),
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == "__main__":
+    import nest_asyncio
+    nest_asyncio.apply()
     asyncio.run(main())
