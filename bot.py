@@ -1,87 +1,79 @@
-import os
 import asyncio
-import tempfile
+import logging
+import os
+import random
 import string
-import secrets
 import subprocess
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-from aiohttp import web
+import nest_asyncio
+nest_asyncio.apply()
 
-TOKEN = os.getenv("TOKEN")
-PORT = int(os.getenv("PORT", "8080"))
+# Логгинг
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-started_users = set()
+# Получи токен из переменной окружения (рекомендуется для Render)
+TOKEN = os.environ.get("BOT_TOKEN")  # Установи в Render > Environment > BOT_TOKEN
 
+# Генерация пароля
 def generate_password(length=8):
-    alphabet = string.ascii_letters + string.digits
-    while True:
-        password = ''.join(secrets.choice(alphabet) for _ in range(length))
-        if any(c.islower() for c in password) and any(c.isupper() for c in password) and any(c.isdigit() for c in password):
-            return password
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
 
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id not in started_users:
-        started_users.add(user_id)
-        await update.message.reply_text("Привет! Пришли файл, и я заархивирую его с паролем.")
-    else:
-        await update.message.reply_text("Ты уже начал, можешь просто присылать файлы 😊")
+    await update.message.reply_text("Привет! Пришли мне файл, и я заархивирую его с паролем.")
 
+# Обработка файла
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id not in started_users:
-        await update.message.reply_text("Сначала отправь команду /start.")
-        return
-
-    document = update.message.document
-    if not document:
+    file = update.message.document or update.message.video or update.message.audio
+    if not file:
         await update.message.reply_text("Пожалуйста, пришли файл.")
         return
 
+    file_id = file.file_id
+    file_name = file.file_name
     password = generate_password()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, document.file_name)
-        archive_path = os.path.join(tmpdir, document.file_name + ".zip")
+    new_name = f"{file_id}_{file_name}"
+    zip_name = f"{file_id}.zip"
 
-        file = await document.get_file()
-        await file.download_to_drive(input_path)
+    file_obj = await context.bot.get_file(file_id)
+    await file_obj.download_to_drive(new_name)
 
-        # Архивируем с паролем через zip
-        subprocess.run([
-            "zip", "-j", "-P", password, archive_path, input_path
-        ], check=True)
+    # Используем встроенный zip для создания архива с паролем (не AES)
+    subprocess.run(["zip", "-P", password, zip_name, new_name], check=True)
 
-        with open(archive_path, "rb") as f:
-            await update.message.reply_document(f, filename=os.path.basename(archive_path))
+    with open(zip_name, "rb") as f:
+        await update.message.reply_document(f, filename=zip_name)
 
-        await update.message.reply_text(f"Файл заархивирован. Пароль: `{password}`", parse_mode="Markdown")
+    await update.message.reply_text(f"🔐 Пароль: `{password}`", parse_mode="Markdown")
 
-# HTTP-заглушка для Render
-async def handle(request):
-    return web.Response(text="Bot is alive!")
+    # Удаляем временные файлы
+    os.remove(new_name)
+    os.remove(zip_name)
 
+# Основной запуск
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL | filters.Audio.ALL, handle_file))
 
-    # aiohttp web server
-    runner = web.AppRunner(web.Application())
-    runner.app.add_routes([web.get("/", handle)])
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    print("HTTP server started. Telegram bot is polling...")
+    logger.info("Бот запущен...")
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
 
-    await app.run_polling()
-
-# Никаких asyncio.run(...)!
-if __name__ == "__main__":
-    try:
-        asyncio.get_event_loop().run_until_complete(main())
-    except RuntimeError as e:
-        print("Event loop error:", e)
+# Запускаем с учётом nest_asyncio
+asyncio.get_event_loop().create_task(main())
+asyncio.get_event_loop().run_forever()
