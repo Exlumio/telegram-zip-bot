@@ -1,74 +1,84 @@
-import os
-import asyncio
 import logging
-import secrets
+import os
+import random
 import string
 import subprocess
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
+    ContextTypes,
     filters,
 )
-import nest_asyncio
 
-# Логгирование
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = "https://telegram-zip-bot.onrender.com"
+PORT = int(os.environ.get("PORT", 10000))
+
 logging.basicConfig(level=logging.INFO)
 
-# Токен из переменной окружения
-TOKEN = os.getenv("BOT_TOKEN")
-
 # Генерация случайного пароля
-def generate_password(length=12):
-    chars = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(length))
+def generate_password(length=8):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-# Команда /start
+# Обработка команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Пришли мне файл, и я отправлю его в ZIP-архиве с паролем.")
+    await update.message.reply_text("Привет! Отправь мне файл, и я пришлю его в zip-архиве с паролем.")
 
 # Обработка файлов
+def zip_file_with_password(input_path, output_path, password):
+    result = subprocess.run([
+        'zip', '-j', '--password', password, output_path, input_path
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        logging.error(f"ZIP error: {result.stderr}")
+    return result.returncode == 0
+
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document or update.message.video or update.message.audio
+    file = update.message.document
     if not file:
-        await update.message.reply_text("Не удалось определить тип файла.")
+        await update.message.reply_text("Отправь, пожалуйста, файл.")
         return
 
-    # Скачиваем файл
-    file_path = f"{file.file_unique_id}_{file.file_name}"
-    new_file = await file.get_file()
-    await new_file.download_to_drive(file_path)
+    file_path = f"downloads/{file.file_unique_id}_{file.file_name}"
+    zip_path = file_path + ".zip"
 
-    # Генерируем пароль и имя архива
+    os.makedirs("downloads", exist_ok=True)
+
+    telegram_file = await context.bot.get_file(file.file_id)
+    await telegram_file.download_to_drive(file_path)
+
     password = generate_password()
-    zip_name = file_path + ".zip"
+    success = zip_file_with_password(file_path, zip_path, password)
 
-    # Используем встроенный zip (Render поддерживает)
-    zip_command = ["zip", "-j", "-P", password, zip_name, file_path]
-    subprocess.run(zip_command)
+    if success:
+        await update.message.reply_document(
+            document=open(zip_path, "rb"),
+            filename=os.path.basename(zip_path),
+            caption=f"Пароль для архива: {password}"
+        )
+    else:
+        await update.message.reply_text("Не удалось создать архив.")
 
-    # Отправка архива пользователю
-    with open(zip_name, "rb") as archive:
-        await update.message.reply_document(archive, filename=zip_name)
-
-    # Отправка пароля
-    await update.message.reply_text(f"🔐 Пароль от архива: `{password}`", parse_mode="Markdown")
-
-    # Удаляем временные файлы
     os.remove(file_path)
-    os.remove(zip_name)
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
 
-# Основной запуск
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ATTACHMENT, handle_file))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    await app.run_polling()
+    await app.bot.set_webhook(url=WEBHOOK_URL)
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL
+    )
 
-if __name__ == "__main__":
-    nest_asyncio.apply()
+if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())
