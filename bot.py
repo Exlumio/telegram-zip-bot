@@ -7,9 +7,12 @@ import subprocess
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
 from aiohttp import web
 
 TOKEN = os.getenv("TOKEN")
+PORT = int(os.getenv("PORT", "8080"))
+
 started_users = set()
 
 def generate_password(length=8):
@@ -42,11 +45,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, document.file_name)
-        archive_path = os.path.join(tmpdir, f"{document.file_name}.zip")
+        archive_path = os.path.join(tmpdir, document.file_name + ".zip")
 
         file = await document.get_file()
         await file.download_to_drive(input_path)
 
+        # Архивируем с паролем через zip
         subprocess.run([
             "zip", "-j", "-P", password, archive_path, input_path
         ], check=True)
@@ -56,25 +60,28 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(f"Файл заархивирован. Пароль: `{password}`", parse_mode="Markdown")
 
-# Запуск aiohttp-заглушки + бота
-async def run():
-    # Бот
+# HTTP-заглушка для Render
+async def handle(request):
+    return web.Response(text="Bot is alive!")
+
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    # aiohttp-заглушка
-    web_app = web.Application()
-    web_app.add_routes([web.get("/", lambda _: web.Response(text="Bot is alive"))])
-
-    # Запуск бота и сервера параллельно
-    runner = web.AppRunner(web_app)
+    # aiohttp web server
+    runner = web.AppRunner(web.Application())
+    runner.app.add_routes([web.get("/", handle)])
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-
     print("HTTP server started. Telegram bot is polling...")
+
     await app.run_polling()
 
+# Никаких asyncio.run(...)!
 if __name__ == "__main__":
-    asyncio.run(run())
+    try:
+        asyncio.get_event_loop().run_until_complete(main())
+    except RuntimeError as e:
+        print("Event loop error:", e)
