@@ -63,7 +63,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_document(
             f,
             filename=zip_name,
-            caption=f"\n🔐 Пароль: `{password}`",
+            caption=f"✅ Архив создан.\n🔐 Пароль: `{password}`",
             parse_mode="Markdown"
         )
 
@@ -75,20 +75,23 @@ async def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(
-        filters.ATTACHMENT,
-        handle_file
-    ))
+    app.add_handler(MessageHandler(filters.ATTACHMENT, handle_file))
 
     # Запускаем webhook
-    await app.run_webhook(
+    await app.initialize()
+    await app.start()
+    await app.bot.set_webhook(WEBHOOK_URL)
+    await app.updater.start_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", "10000")),
-        webhook_url=WEBHOOK_URL
+        url_path="",
+        webhook_url=WEBHOOK_URL,
     )
+
+    logger.info("Bot started via webhook")
+    await asyncio.Event().wait()  # Бесконечный цикл, чтобы бот жил
 
 if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
