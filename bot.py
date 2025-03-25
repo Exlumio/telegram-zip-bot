@@ -63,7 +63,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_document(
             f,
             filename=zip_name,
-            caption=f"✅ Архив создан.\n🔐 Пароль: `{password}`",
+            caption=f"\n🔐 Пароль: `{password}`",
             parse_mode="Markdown"
         )
 
