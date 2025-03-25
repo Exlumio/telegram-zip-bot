@@ -55,10 +55,10 @@ async def set_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "mode_zip":
         user_modes[user_id] = 'zip'
-        await query.edit_message_text("Режим установлен: \ud83d\udce6 Архиватор")
+        await query.edit_message_text("Режим установлен: 📦 Архиватор")
     elif query.data == "mode_ai":
         user_modes[user_id] = 'ai'
-        await query.edit_message_text("Режим установлен: \ud83e\udde0 Нейросеть")
+        await query.edit_message_text("Режим установлен: \U0001F9E0 Нейросеть")
 
 # Обработка файлов
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
